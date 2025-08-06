@@ -36,3 +36,8 @@ class KitchenAvailabilityService:
         if avail and avail.current_load > 0:
             new_load = avail.current_load - 1
             self.repo.update(self.kitchen_id, current_load=new_load)
+
+    def set_operational_status(self, is_operational: bool):
+        """Imposta lo stato operativo (aperta/chiusa) della cucina."""
+        self.repo.update(self.kitchen_id, kitchen_operational=is_operational)
+        print(f"INFO: Stato operativo della cucina impostato a {is_operational}")

@@ -2,9 +2,9 @@
 
 from uuid import UUID
 from model import Order
-from .kitchen_availability_service import KitchenAvailabilityService
+from .kitchen_service import KitchenAvailabilityService
 from .menu_service import MenuService
-from .order_status_service import OrderStatusService
+from .order_service import OrderStatusService
 # from producers import KitchenEventProducer
 
 class OrderProcessingService:

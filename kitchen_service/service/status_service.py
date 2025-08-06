@@ -3,13 +3,13 @@
 from uuid import UUID
 from repository import OrderStatusRepository
 from model import OrderStatus
-# from producers import KitchenEventProducer # Da importare nell'app reale
+from producers import KitchenEventProducer # Da importare nell'app reale
 
 class OrderStatusService:
-    def __init__(self, status_repo: OrderStatusRepository, kitchen_id: UUID): #, producer: KitchenEventProducer):
+    def __init__(self, status_repo: OrderStatusRepository, kitchen_id: UUID, producer: KitchenEventProducer): #, producer: KitchenEventProducer):
         self.repo = status_repo
         self.kitchen_id = kitchen_id
-        # self.producer = producer
+        self.producer = producer
 
     def update_status(self, order_id: UUID, new_status_literal: str) -> bool:
         """

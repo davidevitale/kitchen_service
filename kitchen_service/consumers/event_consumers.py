@@ -1,5 +1,4 @@
 # cartella: consumers/event_consumer.py
-
 from kafka import KafkaConsumer
 import json
 from uuid import UUID

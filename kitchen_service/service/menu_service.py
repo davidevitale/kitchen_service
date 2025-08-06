@@ -1,5 +1,4 @@
 # cartella: service/menu_service.py
-
 from uuid import UUID
 from repository import MenuRepository
 
@@ -15,17 +14,17 @@ class MenuService:
 
     def commit_order_dish(self, dish_id: UUID) -> bool:
         """
-        Tenta di "committare" un piatto per un ordine, decrementandone la scorta.
+        Esegue un decremento atomico della scorta per un piatto.
         Restituisce True se l'operazione ha successo, False altrimenti.
-        
-        ⚠️ AVVERTIMENTO SULLA SICUREZZA:
-        Questo metodo presume che il metodo del repository sottostante
-        (decrement_dish_availability) sia ATOMICO. Se non lo è, questo
-        servizio non sarà affidabile.
         """
-        # Questo è il punto in cui la versione non-atomica fallirebbe
-        # sotto carico. Assumiamo che il repository sia sicuro.
-        result = self.repo.decrement_dish_availability(self.kitchen_id, dish_id)
+        # Chiama il metodo atomico del repository
+        result_code = self.repo.atomic_decrement_availability(self.kitchen_id, dish_id)
         
-        # Un risultato non nullo o positivo indica successo
-        return result is not None
+        # Il service interpreta il risultato.
+        # Un codice di ritorno >= 0 indica successo.
+        if result_code >= 0:
+            print(f"INFO: Scorta per piatto {dish_id} decrementata. Nuova quantità: {result_code}")
+            return True
+        else:
+            print(f"ERROR: Fallito commit per piatto {dish_id}. Codice: {result_code}")
+            return False

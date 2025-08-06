@@ -1,6 +1,6 @@
 # cartella: producers/kitchen_event_producer.py
 
-from .kafka_producer import producer
+from .kafka_producers import producer
 from model import OrderStatus
 from uuid import UUID
 
