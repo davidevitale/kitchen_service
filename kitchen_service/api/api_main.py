@@ -1,5 +1,3 @@
-# cartella: api/main.py
-
 from fastapi import FastAPI, Depends, HTTPException
 from uuid import UUID
 from pydantic import BaseModel
@@ -22,20 +20,20 @@ from producers import KitchenEventProducer
 from model import OrderStatus
 
 # --- Blocco di Inizializzazione delle Dipendenze (Dependency Injection) ---
-# In un'applicazione reale, questi valori verrebbero da un file di configurazione o variabili d'ambiente.
 
 # ID UNIVOCO DI QUESTA ISTANZA DI CUCINA
-# Sostituisci con un UUID generato una sola volta per la tua cucina
 KITCHEN_ID = UUID("123e4567-e89b-12d3-a456-426614174000") 
 
-# Configurazione dei database
-REDIS_CLUSTER_NODES = [{"host": "localhost", "port": 7001}] # Esempio per Redis Cluster
+# --- Configurazione dei Database ---
+# MODIFICA: Semplificata la configurazione per una singola istanza Redis.
+# Questo risolve l'errore "Cluster mode is not enabled".
+REDIS_CONFIG = {"host": "localhost", "port": 6379, "db": 0} # Usiamo la porta standard 6379
 ETCD_HOST = 'localhost'
 ETCD_PORT = 2379
 
 # 1. Istanziamo i Repository
-# NOTA: Qui va usata la versione sicura e atomica di MenuRepository!
-menu_repo = MenuRepository(redis_cluster_nodes=REDIS_CLUSTER_NODES)
+# MODIFICA: Passiamo la nuova configurazione al repository del menu.
+menu_repo = MenuRepository(redis_config=REDIS_CONFIG)
 order_status_repo = OrderStatusRepository(host=ETCD_HOST, port=ETCD_PORT)
 kitchen_availability_repo = KitchenAvailabilityRepository()
 
@@ -65,7 +63,6 @@ order_processing_service = OrderProcessingService(
 )
 
 # 4. Funzioni "provider" per FastAPI
-# Queste funzioni permettono a FastAPI di passare le istanze dei servizi agli endpoint
 def get_order_processing_service():
     return order_processing_service
 
@@ -73,7 +70,6 @@ def get_kitchen_availability_service():
     return kitchen_availability_service
 
 # --- Fine Blocco Inizializzazione ---
-
 
 app = FastAPI(
     title="Kitchen Service API",
@@ -89,13 +85,11 @@ def mark_order_as_ready(
 ):
     """
     Endpoint per un operatore per marcare un ordine come 'pronto per il ritiro'.
-    Questa è la funzionalità chiave richiesta dalla traccia.
     """
     try:
         service.handle_order_ready(order_id)
         return {"message": "Stato ordine aggiornato a 'ready'. Notifica inviata."}
     except Exception as e:
-        # In un'app reale, gestiresti eccezioni più specifiche
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -108,7 +102,6 @@ def set_kitchen_operational_status(
     service: KitchenAvailabilityService = Depends(get_kitchen_availability_service)
 ):
     """
-
     Endpoint per aprire o chiudere la cucina.
     """
     service.set_operational_status(status_update.is_operational)

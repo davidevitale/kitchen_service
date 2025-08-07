@@ -1,74 +1,127 @@
-# cartella: repository/menu_rep.py
 import redis
-from typing import Optional, List
+import json
+from typing import Optional, Dict, Any, List
 from uuid import UUID
-from model import Dish, Menu
-
-# Script Lua per operazioni atomiche. Questa è best practice.
-SET_QUANTITY_SCRIPT = """
-local dish_json = redis.call('HGET', KEYS[1], ARGV[1])
-if not dish_json then return -1 end
-local quantity_pattern = '"available_quantity":%s*%d+'
-if not string.match(dish_json, quantity_pattern) then return -2 end
-local new_quantity = tonumber(ARGV[2])
-local new_dish_json = string.gsub(dish_json, quantity_pattern, '"available_quantity":'..tostring(new_quantity))
-redis.call('HSET', KEYS[1], ARGV[1], new_dish_json)
-return new_quantity
-"""
-
-INCREMENT_QUANTITY_SCRIPT = """
-local amount = tonumber(ARGV[2])
-local dish_json = redis.call('HGET', KEYS[1], ARGV[1])
-if not dish_json then return -1 end
-local quantity_str = string.match(dish_json, '"available_quantity":%s*(%d+)')
-if not quantity_str then return -2 end
-local new_quantity = tonumber(quantity_str) + amount
-local new_dish_json = string.gsub(dish_json, '"available_quantity":%s*'..quantity_str, '"available_quantity":'..tostring(new_quantity))
-redis.call('HSET', KEYS[1], ARGV[1], new_dish_json)
-return new_quantity
-"""
-
-DECREMENT_QUANTITY_SCRIPT = """
-local amount = tonumber(ARGV[2])
-local dish_json = redis.call('HGET', KEYS[1], ARGV[1])
-if not dish_json then return -1 end
-local quantity_str = string.match(dish_json, '"available_quantity":%s*(%d+)')
-if not quantity_str then return -2 end
-local quantity = tonumber(quantity_str)
-if quantity < amount then return -3 end -- Non abbastanza quantità
-local new_quantity = quantity - amount
-local new_dish_json = string.gsub(dish_json, '"available_quantity":%s*'..quantity_str, '"available_quantity":'..tostring(new_quantity))
-redis.call('HSET', KEYS[1], ARGV[1], new_dish_json)
-return new_quantity
-"""
+from model import Dish # Assumiamo che esista un modello Pydantic 'Dish'
 
 class MenuRepository:
-    def __init__(self, redis_cluster_nodes: List[dict]):
-        self.redis = redis.RedisCluster(startup_nodes=redis_cluster_nodes, decode_responses=True)
-        # Registra gli script per efficienza
-        self.set_script = self.redis.register_script(SET_QUANTITY_SCRIPT)
-        self.increment_script = self.redis.register_script(INCREMENT_QUANTITY_SCRIPT)
-        self.decrement_script = self.redis.register_script(DECREMENT_QUANTITY_SCRIPT)
+    """
+    Repository per la gestione del menu della cucina.
+    
+    Questo repository è stato corretto per:
+    1. Usare un client Redis standard (`redis.Redis`) per evitare errori di connessione
+       con istanze Redis standalone.
+    2. Utilizzare una struttura dati più efficiente e idiomatica per Redis:
+       invece di un unico JSON, ogni piatto è un Hash separato.
+    3. Sostituire complessi script Lua con comandi atomici nativi di Redis
+       (come HINCRBY), che è più semplice, veloce e meno propenso a errori.
+    """
 
-    # ... metodi get/save/update/delete invariati ...
+    def __init__(self, redis_config: Dict[str, Any]):
+        """
+        Inizializza il repository e stabilisce la connessione a Redis.
 
-    def get_dish(self, kitchen_id: UUID, dish_id: UUID) -> Optional[Dish]:
-        dish_json = self.redis.hget(self._menu_key(kitchen_id), str(dish_id))
-        return Dish.parse_raw(dish_json) if dish_json else None
+        :param redis_config: Un dizionario con i parametri di connessione 
+                             (es. {'host': 'localhost', 'port': 6379, 'db': 0}).
+        """
+        try:
+            # Usiamo redis.Redis per connetterci a un'istanza standalone.
+            self.redis = redis.Redis(**redis_config, decode_responses=True)
+            self.redis.ping()
+            print(f"Connessione a Redis ({redis_config.get('host')}:{redis_config.get('port')}) riuscita.")
+        except redis.exceptions.ConnectionError as e:
+            print(f"ERRORE: Impossibile connettersi a Redis. Dettagli: {e}")
+            raise
+
+    def _get_menu_key(self, kitchen_id: UUID) -> str:
+        """Helper per generare la chiave Redis per il SET che contiene gli ID dei piatti di un menu."""
+        return f"kitchen:{kitchen_id}:dishes"
+
+    def _get_dish_key(self, dish_id: UUID) -> str:
+        """Helper per generare la chiave Redis per l'Hash di un singolo piatto."""
+        return f"dish:{dish_id}"
+
+    def save_dish(self, kitchen_id: UUID, dish: Dish) -> None:
+        """
+        Salva un singolo piatto in Redis come Hash e aggiunge il suo ID al menu della cucina.
+        
+        :param kitchen_id: L'ID della cucina a cui appartiene il piatto.
+        :param dish: L'oggetto Dish da salvare.
+        """
+        dish_key = self._get_dish_key(dish.id)
+        menu_key = self._get_menu_key(kitchen_id)
+        
+        # Salva il piatto come un Hash. Usiamo .dict() se Dish è un modello Pydantic.
+        self.redis.hset(dish_key, mapping=dish.dict())
+        
+        # Aggiunge l'ID del piatto al Set del menu della cucina per un recupero efficiente.
+        self.redis.sadd(menu_key, str(dish.id))
+
+    def get_dish(self, dish_id: UUID) -> Optional[Dish]:
+        """
+        Recupera un singolo piatto dal suo ID.
+
+        :param dish_id: L'ID del piatto.
+        :return: L'oggetto Dish o None se non trovato.
+        """
+        dish_key = self._get_dish_key(dish_id)
+        dish_data = self.redis.hgetall(dish_key)
+        
+        if not dish_data:
+            return None
+        
+        # Converte i valori recuperati (stringhe) nei tipi corretti per il modello Dish.
+        # Questo è un esempio, potrebbe essere necessario adattarlo al tuo modello esatto.
+        dish_data['id'] = UUID(dish_data['id'])
+        dish_data['price'] = float(dish_data['price'])
+        dish_data['available_quantity'] = int(dish_data['available_quantity'])
+        
+        return Dish(**dish_data)
+
+    def get_all_dishes(self, kitchen_id: UUID) -> List[Dish]:
+        """
+        Recupera tutti i piatti per una data cucina.
+
+        :param kitchen_id: L'ID della cucina.
+        :return: Una lista di oggetti Dish.
+        """
+        menu_key = self._get_menu_key(kitchen_id)
+        dish_ids = self.redis.smembers(menu_key)
+        
+        dishes = []
+        for dish_id_str in dish_ids:
+            dish = self.get_dish(UUID(dish_id_str))
+            if dish:
+                dishes.append(dish)
+        return dishes
 
     # --- Metodi Atomici per Gestire la Disponibilità ---
+    
+    def atomic_set_availability(self, dish_id: UUID, new_quantity: int) -> int:
+        """
+        Imposta atomicamente la quantità di un piatto.
+        Restituisce la nuova quantità.
+        """
+        dish_key = self._get_dish_key(dish_id)
+        self.redis.hset(dish_key, 'available_quantity', new_quantity)
+        return new_quantity
 
-    def atomic_set_availability(self, kitchen_id: UUID, dish_id: UUID, new_quantity: int) -> int:
-        """Imposta atomicamente la quantità. Restituisce la nuova quantità o un codice di errore."""
-        key = self._menu_key(kitchen_id)
-        return int(self.set_script(keys=[key], args=[str(dish_id), new_quantity]))
+    def atomic_increment_availability(self, dish_id: UUID, amount: int = 1) -> int:
+        """
+        Incrementa atomicamente la quantità usando il comando nativo HINCRBY.
+        Restituisce la nuova quantità.
+        """
+        dish_key = self._get_dish_key(dish_id)
+        return self.redis.hincrby(dish_key, 'available_quantity', amount)
 
-    def atomic_increment_availability(self, kitchen_id: UUID, dish_id: UUID, amount: int = 1) -> int:
-        """Incrementa atomicamente la quantità. Restituisce la nuova quantità o un codice di errore."""
-        key = self._menu_key(kitchen_id)
-        return int(self.increment_script(keys=[key], args=[str(dish_id), amount]))
-
-    def atomic_decrement_availability(self, kitchen_id: UUID, dish_id: UUID, amount: int = 1) -> int:
-        """Decrementa atomicamente la quantità. Restituisce la nuova quantità o un codice di errore."""
-        key = self._menu_key(kitchen_id)
-        return int(self.decrement_script(keys=[key], args=[str(dish_id), amount]))
+    def atomic_decrement_availability(self, dish_id: UUID, amount: int = 1) -> int:
+        """
+        Decrementa atomicamente la quantità. HINCRBY accetta anche valori negativi.
+        Restituisce la nuova quantità.
+        
+        NOTA: Questo metodo non controlla se la quantità va sotto zero.
+        La logica di business per prevenire quantità negative dovrebbe essere gestita
+        nel service layer che chiama questo metodo.
+        """
+        dish_key = self._get_dish_key(dish_id)
+        return self.redis.hincrby(dish_key, 'available_quantity', -amount)

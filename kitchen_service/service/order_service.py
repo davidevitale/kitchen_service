@@ -4,8 +4,8 @@ from uuid import UUID
 from model import Order
 from .kitchen_service import KitchenAvailabilityService
 from .menu_service import MenuService
-from .order_service import OrderStatusService
-# from producers import KitchenEventProducer
+from .status_service import OrderStatusService
+from producers import KitchenEventProducer
 
 class OrderProcessingService:
     def __init__(
@@ -14,29 +14,21 @@ class OrderProcessingService:
         availability_service: KitchenAvailabilityService,
         menu_service: MenuService,
         status_service: OrderStatusService,
-        # producer: KitchenEventProducer
+        producer: KitchenEventProducer
     ):
         self.kitchen_id = kitchen_id
         self.availability_service = availability_service
         self.menu_service = menu_service
         self.status_service = status_service
-        # self.producer = producer
+        self.producer = producer
 
-    def handle_order_request(self, order: Order):
-        """
-        Orchestra la verifica di disponibilità completa.
-        """
-        # Usa gli altri servizi per prendere decisioni
-        is_kitchen_avail = self.availability_service.is_available()
-        is_dish_avail = self.menu_service.is_dish_available(UUID(order.dish_id))
+    async def handle_order_request(self, order: Order): # <--- DEVE ESSERE ASYNC
+            is_kitchen_avail = self.availability_service.is_available()
+            is_dish_avail = self.menu_service.is_dish_available(UUID(order.dish_id))
 
-        if is_kitchen_avail and is_dish_avail:
-            # La cucina è disponibile, pubblica la sua offerta
-            # self.producer.publish_acceptance_offer(order.order_id)
-            print(f"INFO: Cucina {self.kitchen_id} disponibile per ordine {order.order_id}, offerta inviata.")
-        else:
-            print(f"INFO: Cucina {self.kitchen_id} non disponibile per ordine {order.order_id}.")
-
+            if is_kitchen_avail and is_dish_avail:
+                await self.producer.publish_acceptance(UUID(order.order_id), self.kitchen_id) # <--- DEVE USARE AWAIT
+                print(f"INFO: Cucina {self.kitchen_id} disponibile per ordine {order.order_id}, offerta inviata.")
 
     def handle_order_assignment(self, order_id: UUID, dish_id: UUID, assigned_kitchen_id: UUID):
         """
